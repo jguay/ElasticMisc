@@ -43,7 +43,11 @@ function getIndicesWithSetting () {
 	fi
 	listOfIndices=""
 	#note this is 7.7.0+ syntax here
-	listOfIndices=($(curl -k -s -u "${username}:${password}" "${elasticsearchBaseURL}/_settings?pretty&human&expand_wildcards=all" | jq --raw-output "to_entries[] | select (.value.settings.${1} == \"${2}\") | .key"))
+	listOfIndices=($(curl -k -s -u "${username}:${password}" "${elasticsearchBaseURL}/_settings?pretty&human&expand_wildcards=all" | jq --raw-output "to_entries[] | select (.value.settings.${1} == \"${2}\") | select (.value.settings.index.routing.allocation.include._tier_preference == null) |  .key"))
+	
+	#if script is run late and ILM already tried to move old indices; for example require hot with preference data_warm,data_hot with indeex in warm in ILM explain
+	listOfIndicesWithTierPreference=""
+	listOfIndicesWithTierPreference=($(curl -k -s -u "${username}:${password}" "${elasticsearchBaseURL}/_settings?pretty&human&expand_wildcards=all" | jq --raw-output "to_entries[] | select (.value.settings.${1} == \"${2}\") | select (.value.settings.index.routing.allocation.include._tier_preference) | .key"))
 }
 
 function updateIndicesWithSetting () {
@@ -72,6 +76,18 @@ function updateIndicesWithSetting () {
 	fi
 }
 
+function removeFilteringForIndicesAlreadyUsingTierPreference () {
+	jsonPayload="{\"${1}\":null}"
+	for index in "${listOfIndicesWithTierPreference[@]}"
+	do
+		log "processing index [${index}] to put settings [${jsonPayload}]"
+		response_code=$(curl -k -s -H 'Content-Type: application/json' -o /dev/null -w "%{http_code}" -u "${username}:${password}" -XPUT "${elasticsearchBaseURL}/${index}/_settings" -d "${jsonPayload}")
+		if [[ ! "$response_code" == "200" ]]; then
+			log "HTTP response [${response_code}] returned" "ERROR"
+		fi
+	done
+}
+
 function checkPrerequisites () {
 	checkCommand "jq"
 	checkCommand "curl"
@@ -82,14 +98,17 @@ function moveIndicesToTierPreference () {
 	if [[ -n "$valueUsedForHot" ]]; then
 		getIndicesWithSetting "$settingUsedForAllocation" "$valueUsedForHot"
 		updateIndicesWithSetting "$settingUsedForAllocation" "null" "index.routing.allocation.include._tier_preference" "\"data_hot\""
+		removeFilteringForIndicesAlreadyUsingTierPreference "$settingUsedForAllocation"
 	fi
 	if [[ -n "$valueUsedForWarm" ]]; then
 		getIndicesWithSetting "$settingUsedForAllocation" "$valueUsedForWarm"
 		updateIndicesWithSetting "$settingUsedForAllocation" "null" "index.routing.allocation.include._tier_preference" "\"data_warm,data_hot\""
+		removeFilteringForIndicesAlreadyUsingTierPreference "$settingUsedForAllocation"
 	fi
 	if [[ -n "$valueUsedForCold" ]]; then
 		getIndicesWithSetting "$settingUsedForAllocation" "$valueUsedForCold"
 		updateIndicesWithSetting "$settingUsedForAllocation" "null" "index.routing.allocation.include._tier_preference" "\"data_cold,data_warm,data_hot\""
+		removeFilteringForIndicesAlreadyUsingTierPreference "$settingUsedForAllocation"
 	fi
 }
 
