@@ -4,6 +4,9 @@ ESurl=https://localhost:9200
 username=elastic
 ###
 
+# Remove trailing slash from URL if there is any
+ESurl="${ESurl%/}"
+
 function promptPassword () {
 	echo -n "Enter a password for user [${username}]: "
 	read -s password
@@ -24,7 +27,7 @@ function checkPrerequisites () {
 
 function checkESVersion () {
 	ESVersion=$(curl -s -k -u "${username}:${password}" "${ESurl}" | jq --raw-output '.version.number')
-	if [[ ! "$version" = 8* ]]; then
+	if [[ ! "$ESVersion" = 8* ]]; then
 		echo "Version of elasticsearch expected from 8.0.0 to 8.5.3 - detected [${ESVersion}], stopping execution"
 		exit
 	fi
@@ -48,12 +51,13 @@ function fixDataFeed () {
 		echo "Updating datafeed [${1}]" https://github.com/elastic/sdh-ml/issues/401
 		curl -s -k -u "${username}:${password}" -XPOST "${ESurl}"/_ml/datafeeds/"$1"/_update -d '{}'
 	fi
+    echo
 }
 
 function detect500DatafeedResponse () {
 	for datafeed in "${datafeeds[@]}"
 	do
-		response_code=$(curl -k -u "${username}:${password}" -s -o /dev/null -I -w "%{http_code}" "${ESurl}"/_ml/datafeeds/)
+		response_code=$(curl -k -u "${username}:${password}" -s -o /dev/null -I -w "%{http_code}" "${ESurl}"/_ml/datafeeds/"$datafeed")
 		if [[ "$response_code" = 500 ]]; then
 			echo "ERROR detected on datafeed [${datafeed}]"
 			if [[ "$fixDatafeeds" = true ]]; then
@@ -65,6 +69,7 @@ function detect500DatafeedResponse () {
 			echo "INFO : datafeed [${datafeed}] can be parsed, status code [${response_code}]"
 		fi
 	done
+    echo
 }
 
 function runALL() {
